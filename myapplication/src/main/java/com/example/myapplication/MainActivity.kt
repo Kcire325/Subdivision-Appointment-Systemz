@@ -11,8 +11,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.automirrored.filled.Rule
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,7 +50,7 @@ data class ReservationItem(
     val reservedBy: String = "",
     val contact: String = "",
     val purpose: String = "",
-    val formattedDate: String = ""
+    val formattedDate: String = "" // Added for calendar sync
 )
 
 // --- 2. SHARED VIEWMODEL ---
@@ -82,6 +79,7 @@ class ReservationViewModel : ViewModel() {
             val item = _reservations[index]
             _reservations[index] = item.copy(status = newStatus)
             
+            // If approved, add to the global calendar
             if (newStatus == ReservationStatus.ACTIVE) {
                 val times = item.time.split(" - ")
                 calendarEvents.add(
@@ -90,7 +88,7 @@ class ReservationViewModel : ViewModel() {
                         title = item.title,
                         date = item.formattedDate,
                         startTime = times[0],
-                        endTime = if (times.size > 1) times[1] else "",
+                        endTime = times[1],
                         venue = item.title,
                         description = "Purpose: ${item.purpose}",
                         reservedBy = item.reservedBy,
@@ -108,13 +106,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val context = LocalContext.current
             val resViewModel: ReservationViewModel = viewModel()
-            
-            // Load saved data at startup
-            LaunchedEffect(Unit) {
-                UserRepository.loadPersistedData(context)
-            }
 
             MaterialTheme(
                 colorScheme = lightColorScheme(
@@ -149,9 +141,8 @@ fun ProfileSidebarApp(user: User, viewModel: ReservationViewModel, onLogout: () 
             ProfileDrawerContent(
                 user = user,
                 onNavigate = { route ->
-                    if (route == "logout") {
-                        onLogout()
-                    } else {
+                    if (route == "logout") onLogout()
+                    else {
                         currentRoute = route
                         navController.navigate(route)
                     }
@@ -173,18 +164,15 @@ fun ProfileSidebarApp(user: User, viewModel: ReservationViewModel, onLogout: () 
                                     "account" -> "Profile"
                                     else -> "App"
                                 },
-                                color = Color.White,
+                                color = DeepNavy,
                                 fontWeight = FontWeight.Bold
                             )
                         },
                         navigationIcon = {
                             IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                                Icon(Icons.Default.Menu, null, tint = Color.White)
+                                Icon(Icons.Default.Menu, null, tint = DarkBlueGray)
                             }
-                        },
-                        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                            containerColor = DeepNavy
-                        )
+                        }
                     )
                 }
             ) { padding ->
@@ -249,7 +237,7 @@ fun ApprovalCard(reservation: ReservationItem, onAccept: () -> Unit, onReject: (
                 }
             }
             Spacer(Modifier.height(12.dp))
-            HorizontalDivider(color = Color.LightGray.copy(alpha = 0.5f))
+            Divider(color = Color.LightGray.copy(alpha = 0.5f))
             Spacer(Modifier.height(12.dp))
             Text("Reserved by: ${reservation.reservedBy}", fontSize = 14.sp, color = DeepNavy)
             Text("Contact: ${reservation.contact}", fontSize = 14.sp, color = DeepNavy)
@@ -341,41 +329,24 @@ fun FilterChipItem(label: String, isSelected: Boolean, onClick: () -> Unit) {
 
 @Composable
 fun ProfileDrawerContent(user: User, onNavigate: (String) -> Unit) {
-    ModalDrawerSheet(
-        drawerContainerColor = DeepNavy,
-        drawerContentColor = Color.White
-    ) {
+    ModalDrawerSheet(drawerContainerColor = LightLavender) {
         Column(modifier = Modifier.fillMaxSize().padding(vertical = 24.dp)) {
             DrawerMenuItem(Icons.Default.Home, "Home") { onNavigate("home") }
             DrawerMenuItem(Icons.Default.CalendarMonth, "Make a Reservation") { onNavigate("reservation") }
             
             if (user.role == "Admin") {
-                DrawerMenuItem(Icons.AutoMirrored.Filled.Rule, "Approval Request") { onNavigate("approval") }
+                DrawerMenuItem(Icons.Default.Rule, "Approval Request") { onNavigate("approval") }
             } else {
                 DrawerMenuItem(Icons.Default.Event, "Reservations") { onNavigate("reservations") }
             }
             
             DrawerMenuItem(Icons.Default.Person, "My Account") { onNavigate("account") }
             Spacer(Modifier.weight(1f))
-            DrawerMenuItem(Icons.AutoMirrored.Filled.Logout, "Logout") { onNavigate("logout") }
-            
-            HorizontalDivider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 8.dp))
-            
+            DrawerMenuItem(Icons.Default.Close, "Logout") { onNavigate("logout") }
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(DarkBlueGray),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.Person, null, tint = Color.White, modifier = Modifier.size(24.dp))
-                }
+                Icon(Icons.Default.AccountCircle, null, Modifier.size(40.dp).clip(CircleShape), tint = DarkBlueGray)
                 Spacer(Modifier.width(12.dp))
-                Column {
-                    Text(user.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text(user.role, color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
-                }
+                Text(user.name, color = DeepNavy)
             }
         }
     }
@@ -383,15 +354,9 @@ fun ProfileDrawerContent(user: User, onNavigate: (String) -> Unit) {
 
 @Composable
 fun DrawerMenuItem(icon: ImageVector, title: String, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 16.dp), 
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(icon, null, tint = Color.White.copy(alpha = 0.8f))
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = DeepNavy)
         Spacer(Modifier.width(16.dp))
-        Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Text(title, color = DeepNavy)
     }
 }
