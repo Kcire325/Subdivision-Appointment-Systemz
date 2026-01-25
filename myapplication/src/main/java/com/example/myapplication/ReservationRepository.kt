@@ -6,7 +6,8 @@ import org.json.JSONObject
 
 object ReservationRepository {
     private const val PREFS_NAME = "reservation_prefs"
-    private const val KEY_RESERVATIONS = "all_reservations"
+    // Changed key to effectively "delete" old records and start fresh
+    private const val KEY_RESERVATIONS = "all_reservations_v2"
 
     fun saveReservations(context: Context, reservations: List<ReservationItem>) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -55,5 +56,10 @@ object ReservationRepository {
             e.printStackTrace()
         }
         return reservations
+    }
+
+    fun clearAll(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().remove(KEY_RESERVATIONS).apply()
     }
 }

@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Event
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.getValue
@@ -57,13 +58,21 @@ fun timeToMinutes(time: String): Int {
 
 @Composable
 fun Reservation(user: User, viewModel: ReservationViewModel = viewModel()) {
+    // Lock all calendar logic to Philippine Time
+    val phTimeZone = TimeZone.getTimeZone("Asia/Manila")
+    val phCalendar = Calendar.getInstance(phTimeZone)
+
     var viewMode by remember { mutableStateOf("month") }
-    var selectedDate by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.DAY_OF_MONTH)) }
-    var selectedMonth by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.MONTH)) }
-    var selectedYear by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.YEAR)) }
+    var selectedDate by remember { mutableIntStateOf(phCalendar.get(Calendar.DAY_OF_MONTH)) }
+    var selectedMonth by remember { mutableIntStateOf(phCalendar.get(Calendar.MONTH)) }
+    var selectedYear by remember { mutableIntStateOf(phCalendar.get(Calendar.YEAR)) }
     var showEventDetails by remember { mutableStateOf(false) }
     var selectedEvents by remember { mutableStateOf(emptyList<CalendarEvent>()) }
     var showScheduleDialog by remember { mutableStateOf(false) }
+    
+    // Facility Filter State
+    var selectedFacilityFilter by remember { mutableStateOf("All") }
+    val filterOptions = listOf("All", "Basketball Court", "Tennis Court", "Chapel", "Multipurpose Hall")
 
     val monthNames = listOf("January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December")
@@ -71,7 +80,18 @@ fun Reservation(user: User, viewModel: ReservationViewModel = viewModel()) {
     // Helper function to get events for a specific date
     fun getEventsForDate(year: Int, month: Int, day: Int): List<CalendarEvent> {
         val dateString = String.format(Locale.US, "%04d-%02d-%02d", year, month + 1, day)
-        return calendarEvents.filter { it.date == dateString }
+        // Filter events based on status and user authorization
+        var rawEvents = calendarEvents.filter { it.date == dateString }
+        
+        // Apply Facility Filter
+        if (selectedFacilityFilter != "All") {
+            rawEvents = rawEvents.filter { it.venue == selectedFacilityFilter }
+        }
+        
+        return rawEvents.filter { event ->
+            event.status == "ACTIVE" || 
+            (event.status == "PENDING" && (user.role == "Admin" || event.reservedBy == user.name))
+        }.sortedWith(compareByDescending<CalendarEvent> { it.status == "PENDING" }.thenBy { timeToMinutes(it.startTime) })
     }
 
     // Helper function to get days in month
@@ -86,15 +106,16 @@ fun Reservation(user: User, viewModel: ReservationViewModel = viewModel()) {
 
     // Helper function to get first day of week (0 = Sunday)
     fun getFirstDayOfMonth(month: Int, year: Int): Int {
-        val cal = Calendar.getInstance()
+        val cal = Calendar.getInstance(phTimeZone)
         cal.set(year, month, 1)
         return cal.get(java.util.Calendar.DAY_OF_WEEK) - 1
     }
 
     // Helper to check if a date is in the past
     fun isDateInPast(year: Int, month: Int, day: Int): Boolean {
-        val today = Calendar.getInstance()
-        val compareDate = Calendar.getInstance()
+        val today = Calendar.getInstance(phTimeZone)
+        val compareDate = Calendar.getInstance(phTimeZone)
+        // Check if the entire day is in the past
         compareDate.set(year, month, day, 23, 59, 59)
         return compareDate.before(today)
     }
@@ -104,7 +125,7 @@ fun Reservation(user: User, viewModel: ReservationViewModel = viewModel()) {
             .fillMaxSize()
             .background(LightLavender)
     ) {
-        // Top bar with year selector and view mode
+        // Top bar with year selector and filter
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -140,24 +161,44 @@ fun Reservation(user: User, viewModel: ReservationViewModel = viewModel()) {
                 }
             }
 
-            // View mode selector
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            // Facility Filter Dropdown
+            var filterExpanded by remember { mutableStateOf(false) }
+            Box {
                 IconButton(
-                    onClick = { viewMode = "month" },
+                    onClick = { filterExpanded = true },
                     modifier = Modifier
                         .size(40.dp)
                         .background(
-                            if (viewMode == "month") DarkBlueGray else Color.White,
+                            if (selectedFacilityFilter != "All") DarkBlueGray else Color.White,
                             RoundedCornerShape(10.dp)
                         )
                 ) {
                     Icon(
-                        imageVector = Icons.Default.CalendarMonth,
-                        contentDescription = "Month view",
-                        tint = if (viewMode == "month") Color.White else DeepNavy
+                        imageVector = Icons.Default.FilterList,
+                        contentDescription = "Filter Facility",
+                        tint = if (selectedFacilityFilter != "All") Color.White else DeepNavy
                     )
+                }
+                DropdownMenu(
+                    expanded = filterExpanded,
+                    onDismissRequest = { filterExpanded = false },
+                    modifier = Modifier.background(Color.White)
+                ) {
+                    filterOptions.forEach { option ->
+                        DropdownMenuItem(
+                            text = { 
+                                Text(
+                                    option, 
+                                    color = if (selectedFacilityFilter == option) DarkBlueGray else DeepNavy,
+                                    fontWeight = if (selectedFacilityFilter == option) FontWeight.Bold else FontWeight.Normal
+                                ) 
+                            },
+                            onClick = {
+                                selectedFacilityFilter = option
+                                filterExpanded = false
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -168,14 +209,36 @@ fun Reservation(user: User, viewModel: ReservationViewModel = viewModel()) {
                     .fillMaxWidth()
                     .background(LightLavender)
             ) {
-                // Month name
-                Text(
-                    text = monthNames[selectedMonth],
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = DeepNavy,
-                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 16.dp)
-                )
+                // Month name and active filter indicator
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = monthNames[selectedMonth],
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DeepNavy
+                    )
+                    
+                    if (selectedFacilityFilter != "All") {
+                        Surface(
+                            color = DarkBlueGray.copy(alpha = 0.1f),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text(
+                                text = selectedFacilityFilter,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                fontSize = 12.sp,
+                                color = DarkBlueGray,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // Days of week header
                 Row(
@@ -214,9 +277,8 @@ fun Reservation(user: User, viewModel: ReservationViewModel = viewModel()) {
                                 val dayNumber = week * 7 + day - firstDayOfWeek + 1
                                 val isValidDay = dayNumber in 1..daysInMonth
                                 val isPast = if (isValidDay) isDateInPast(selectedYear, selectedMonth, dayNumber) else false
-                                val hasEvents = if (isValidDay) {
-                                    getEventsForDate(selectedYear, selectedMonth, dayNumber).isNotEmpty()
-                                } else false
+                                val eventsForDay = if (isValidDay) getEventsForDate(selectedYear, selectedMonth, dayNumber) else emptyList()
+                                val hasEvents = eventsForDay.isNotEmpty()
 
                                 Box(
                                     modifier = Modifier
@@ -233,9 +295,8 @@ fun Reservation(user: User, viewModel: ReservationViewModel = viewModel()) {
                                         )
                                         .clickable(enabled = isValidDay) {
                                             selectedDate = dayNumber
-                                            val events = getEventsForDate(selectedYear, selectedMonth, dayNumber)
-                                            if (events.isNotEmpty()) {
-                                                selectedEvents = events
+                                            if (eventsForDay.isNotEmpty()) {
+                                                selectedEvents = eventsForDay
                                                 showEventDetails = true
                                             }
                                         },
@@ -317,16 +378,36 @@ fun Reservation(user: User, viewModel: ReservationViewModel = viewModel()) {
 
                 // Schedule Button - REMOVED FROM ADMIN SIDE ONLY
                 if (user.role != "Admin") {
-                    val isSelectedPast = isDateInPast(selectedYear, selectedMonth, selectedDate)
+                    // Disable button if date is in the past OR it's today and all slots are gone
+                    val isPastDate = isDateInPast(selectedYear, selectedMonth, selectedDate)
+                    val today = Calendar.getInstance(phTimeZone)
+                    val isToday = selectedYear == today.get(Calendar.YEAR) && 
+                                  selectedMonth == today.get(Calendar.MONTH) && 
+                                  selectedDate == today.get(Calendar.DAY_OF_MONTH)
+                    
+                    // Logic: If it's today, check if any slots are still available
+                    var anySlotsAvailable = true
+                    if (isToday) {
+                        anySlotsAvailable = timeSlots.any { slot ->
+                            val endTimeStr = slot.split(" - ")[1]
+                            val endMinutes = timeToMinutes(endTimeStr)
+                            val currentMinutes = today.get(Calendar.HOUR_OF_DAY) * 60 + today.get(Calendar.MINUTE)
+                            // Reservable if current time is before the end of the slot
+                            endMinutes > currentMinutes
+                        }
+                    }
+
+                    val canSchedule = !isPastDate && anySlotsAvailable
+                    
                     Button(
-                        onClick = { if (!isSelectedPast) showScheduleDialog = true },
-                        enabled = !isSelectedPast,
+                        onClick = { if (canSchedule) showScheduleDialog = true },
+                        enabled = canSchedule,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp)
                             .height(50.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isSelectedPast) Color.LightGray else DarkBlueGray,
+                            containerColor = if (!canSchedule) Color.LightGray else DarkBlueGray,
                             disabledContainerColor = Color.LightGray
                         ),
                         shape = RoundedCornerShape(12.dp)
@@ -334,12 +415,12 @@ fun Reservation(user: User, viewModel: ReservationViewModel = viewModel()) {
                         Icon(
                             imageVector = Icons.Default.Event,
                             contentDescription = null,
-                            tint = if (isSelectedPast) Color.Gray else Color.White
+                            tint = if (!canSchedule) Color.Gray else Color.White
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (isSelectedPast) "Cannot Schedule Past Date" else "Schedule Facility",
-                            color = if (isSelectedPast) Color.Gray else Color.White,
+                            text = if (!canSchedule) "No Available Slots" else "Schedule Facility",
+                            color = if (!canSchedule) Color.Gray else Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
                         )
@@ -450,12 +531,31 @@ fun CalendarEventItem(event: CalendarEvent, isAdmin: Boolean) {
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
-            Text(
-                text = event.title,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = DeepNavy
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = event.title,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = DeepNavy
+                )
+                
+                Surface(
+                    color = if (event.status == "PENDING") Color(0xFFF59E0B).copy(alpha = 0.15f) else SuccessGreen.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = if (event.status == "PENDING") "PENDING" else "APPROVED",
+                        color = if (event.status == "PENDING") Color(0xFFF59E0B) else SuccessGreen,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -498,17 +598,18 @@ fun CalendarEventItem(event: CalendarEvent, isAdmin: Boolean) {
                 lineHeight = 16.sp
             )
 
-            if (isAdmin && (event.reservedBy.isNotEmpty() || event.reserverPhone.isNotEmpty())) {
-                Spacer(modifier = Modifier.height(8.dp))
-                HorizontalDivider(color = DeepNavy.copy(alpha = 0.1f))
-                Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider(color = DeepNavy.copy(alpha = 0.1f))
+            Spacer(modifier = Modifier.height(8.dp))
 
-                Text(
-                    text = "Reserved by: ${event.reservedBy}",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = DeepNavy
-                )
+            Text(
+                text = "Reserved by: ${event.reserverRole}",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = DeepNavy
+            )
+            
+            if (isAdmin && event.reserverPhone.isNotEmpty()) {
                 Text(
                     text = "Contact: ${event.reserverPhone}",
                     fontSize = 12.sp,
@@ -530,6 +631,7 @@ fun ScheduleFacilityDialog(
     monthNames: List<String>,
     onDismiss: () -> Unit
 ) {
+    val phTimeZone = TimeZone.getTimeZone("Asia/Manila")
     val context = LocalContext.current
     var selectedFacility by remember { mutableStateOf<Facility?>(null) }
     var selectedTimeSlots by remember { mutableStateOf(setOf<String>()) }
@@ -724,6 +826,18 @@ fun ScheduleFacilityDialog(
                                 val sStart = timeToMinutes(slotTimes[0])
                                 val sEnd = timeToMinutes(slotTimes[1])
 
+                                // NEW: Check if this slot is in the past for the current day using Philippine Time
+                                val today = Calendar.getInstance(phTimeZone)
+                                val isToday = selectedYear == today.get(Calendar.YEAR) && 
+                                              selectedMonth == today.get(Calendar.MONTH) && 
+                                              selectedDate == today.get(Calendar.DAY_OF_MONTH)
+                                
+                                val isPastSlot = if (isToday) {
+                                    val currentMinutes = today.get(Calendar.HOUR_OF_DAY) * 60 + today.get(Calendar.MINUTE)
+                                    // Modified: Disables ONLY IF the current time is AT OR PAST the END of the slot
+                                    currentMinutes >= sEnd
+                                } else false
+
                                 val isTaken = if (selectedFacility != null) {
                                     calendarEvents.any { e ->
                                         e.venue == selectedFacility?.name &&
@@ -737,12 +851,12 @@ fun ScheduleFacilityDialog(
                                         .clip(RoundedCornerShape(4.dp))
                                         .background(
                                             when {
-                                                isTaken -> Color.LightGray.copy(alpha = 0.5f)
+                                                isTaken || isPastSlot -> Color.LightGray.copy(alpha = 0.5f)
                                                 isSelected -> Color(0xFF1E88E5)
                                                 else -> Color(0xFFE0F2F1)
                                             }
                                         )
-                                        .clickable(enabled = !isTaken) {
+                                        .clickable(enabled = !isTaken && !isPastSlot) {
                                             selectedTimeSlots = if (isSelected) {
                                                 selectedTimeSlots - slot
                                             } else {
@@ -757,7 +871,7 @@ fun ScheduleFacilityDialog(
                                         text = slot,
                                         fontSize = 9.sp,
                                         color = when {
-                                            isTaken -> Color.Gray
+                                            isTaken || isPastSlot -> Color.Gray
                                             isSelected -> Color.White
                                             else -> Color(0xFF2E7D32)
                                         },
@@ -911,7 +1025,8 @@ fun PaymentConfirmationDialog(
                 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(
                         onClick = onCancel,
@@ -928,7 +1043,7 @@ fun PaymentConfirmationDialog(
                             }
                         },
                         enabled = selectedImageUri != null,
-                        modifier = Modifier.weight(1.5f).height(45.dp),
+                        modifier = Modifier.weight(2f).heightIn(min = 48.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color(0xFFD1CBE9), // Light purple button
                             disabledContainerColor = Color.LightGray.copy(alpha = 0.5f)
@@ -938,8 +1053,9 @@ fun PaymentConfirmationDialog(
                         Text(
                             "Submit Reservation", 
                             color = if (selectedImageUri != null) DeepNavy else Color.Gray,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }

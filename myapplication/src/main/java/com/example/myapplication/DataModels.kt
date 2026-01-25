@@ -9,7 +9,8 @@ data class User(
     val role: String,
     val contactNum: String,
     val address: String,
-    val profilePictureUri: String? = null
+    val profilePictureUri: String? = null,
+    val passwordHistory: List<String> = emptyList()
 )
 
 data class CommunityEvent(
@@ -35,7 +36,9 @@ data class CalendarEvent(
     val venue: String,
     val description: String,
     val reservedBy: String = "",
-    val reserverPhone: String = ""
+    val reserverPhone: String = "",
+    val reserverRole: String = "",
+    val status: String = "ACTIVE" // Default to ACTIVE, can be PENDING
 )
 
 data class Facility(

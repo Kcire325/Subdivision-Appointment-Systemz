@@ -41,7 +41,7 @@ import java.util.UUID
 // --- 1. DATA MODELS & ENUMS ---
 
 enum class ReservationStatus(val displayName: String, val color: Color) {
-    PENDING("Pending", PendingOrange),
+    PENDING("Pending", Color(0xFFF59E0B)), // PendingOrange
     ACTIVE("Active", SuccessGreen),
     COMPLETED("Completed", Color(0xFF2980B9)),
     REJECTED("Rejected", Color(0xFFC0392B))
@@ -67,34 +67,38 @@ class ReservationViewModel : ViewModel() {
     val reservations: List<ReservationItem> get() = _reservations
 
     fun loadData(context: Context) {
-        if (_reservations.isEmpty()) {
-            val saved = ReservationRepository.loadReservations(context)
-            _reservations.addAll(saved)
-            
-            // Sync active reservations to calendarEvents
-            saved.filter { it.status == ReservationStatus.ACTIVE }.forEach { item ->
+        val saved = ReservationRepository.loadReservations(context)
+        _reservations.clear()
+        _reservations.addAll(saved)
+        refreshCalendarEvents()
+    }
+
+    fun refreshCalendarEvents() {
+        calendarEvents.clear()
+        _reservations.forEach { item ->
+            if (item.status == ReservationStatus.ACTIVE || item.status == ReservationStatus.PENDING) {
                 val times = item.time.split(" - ")
                 val startT = times[0]
                 val endT = if (times.size > 1) times[1] else ""
                 
-                val alreadyExists = calendarEvents.any { 
-                    it.title == item.title && it.date == item.formattedDate && it.startTime == startT 
-                }
-                if (!alreadyExists) {
-                    calendarEvents.add(
-                        CalendarEvent(
-                            id = calendarEvents.size + 1,
-                            title = item.title,
-                            date = item.formattedDate,
-                            startTime = startT,
-                            endTime = endT,
-                            venue = item.title,
-                            description = "Purpose: ${item.purpose}",
-                            reservedBy = item.reservedBy,
-                            reserverPhone = item.contact
-                        )
+                // Find the user's role for this reservation
+                val user = UserRepository.users.find { it.name == item.reservedBy }
+                
+                calendarEvents.add(
+                    CalendarEvent(
+                        id = calendarEvents.size + 1,
+                        title = item.title,
+                        date = item.formattedDate,
+                        startTime = startT,
+                        endTime = endT,
+                        venue = item.title,
+                        description = "Purpose: ${item.purpose}",
+                        reservedBy = item.reservedBy,
+                        reserverPhone = item.contact,
+                        reserverRole = user?.role ?: "User",
+                        status = item.status.name
                     )
-                }
+                )
             }
         }
     }
@@ -113,6 +117,7 @@ class ReservationViewModel : ViewModel() {
         )
         _reservations.add(0, newItem)
         ReservationRepository.saveReservations(context, _reservations)
+        refreshCalendarEvents()
     }
 
     fun updateStatus(context: Context, id: String, newStatus: ReservationStatus) {
@@ -121,24 +126,14 @@ class ReservationViewModel : ViewModel() {
             val item = _reservations[index]
             _reservations[index] = item.copy(status = newStatus)
             ReservationRepository.saveReservations(context, _reservations)
-            
-            if (newStatus == ReservationStatus.ACTIVE) {
-                val times = item.time.split(" - ")
-                calendarEvents.add(
-                    CalendarEvent(
-                        id = calendarEvents.size + 1,
-                        title = item.title,
-                        date = item.formattedDate,
-                        startTime = times[0],
-                        endTime = if (times.size > 1) times[1] else "",
-                        venue = item.title,
-                        description = "Purpose: ${item.purpose}",
-                        reservedBy = item.reservedBy,
-                        reserverPhone = item.contact
-                    )
-                )
-            }
+            refreshCalendarEvents()
         }
+    }
+
+    fun clearAll(context: Context) {
+        _reservations.clear()
+        calendarEvents.clear()
+        ReservationRepository.clearAll(context)
     }
 }
 
@@ -233,7 +228,7 @@ fun ProfileSidebarApp(user: User, viewModel: ReservationViewModel, onLogout: () 
                     NavHost(navController = navController, startDestination = "home") {
                         composable("home") { HomeScreen(user) }
                         composable("reservation") { Reservation(user, viewModel) }
-                        composable("reservations") { Reservations(viewModel) }
+                        composable("reservations") { Reservations(user, viewModel) }
                         composable("approval") { ApprovalScreen(viewModel) }
                         composable("account") { Account(user) }
                     }
@@ -367,7 +362,7 @@ fun ApprovalCard(reservation: ReservationItem, onAccept: () -> Unit, onReject: (
                     Text(reservation.time, color = MediumGray, fontSize = 14.sp)
                 }
                 Surface(color = SoftBlue, shape = RoundedCornerShape(8.dp)) {
-                    Text("PENDING", color = PendingOrange, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Text("PENDING", color = Color(0xFFF59E0B), modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -433,8 +428,9 @@ fun ApprovalCard(reservation: ReservationItem, onAccept: () -> Unit, onReject: (
 // --- 5. RESERVATIONS HISTORY SCREEN ---
 
 @Composable
-fun Reservations(viewModel: ReservationViewModel) {
-    val allReservations = viewModel.reservations
+fun Reservations(user: User, viewModel: ReservationViewModel) {
+    // Filter by the logged-in user's name
+    val allReservations = viewModel.reservations.filter { it.reservedBy == user.name }
     var selectedFilter by remember { mutableStateOf<ReservationStatus?>(null) }
 
     val filteredList = remember(selectedFilter, allReservations.size) {

@@ -18,12 +18,8 @@ val timeSlots = listOf(
     "8:00 PM - 9:00 PM", "9:00 PM - 10:00 PM", "10:00 PM - 11:00 PM"
 )
 
-// The reactive list that stores reservations during the session
-val calendarEvents = mutableStateListOf<CalendarEvent>(
-    CalendarEvent(1, "Community Meeting", "2026-01-05", "9:00 AM", "12:00 PM", "Barangay Hall", "Monthly community gathering"),
-    CalendarEvent(2, "Health Seminar", "2026-01-05", "2:00 PM", "5:00 PM", "Community Center", "Health and wellness discussion"),
-    CalendarEvent(3, "Sports Event", "2026-01-06", "10:00 AM", "3:00 PM", "Barangay Gym", "Basketball tournament")
-)
+// The reactive list that stores reservations during the session - CLEARED
+val calendarEvents = mutableStateListOf<CalendarEvent>()
 
 // The reactive list that stores community events for the home screen
 val sampleEvents = mutableStateListOf<CommunityEvent>(

@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
+import org.json.JSONArray
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -33,6 +34,7 @@ object UserRepository {
         users.forEachIndexed { index, user ->
             val savedPassword = prefs.getString("pwd_${user.username}", null)
             val savedProfilePic = prefs.getString("pic_${user.username}", null)
+            val savedHistory = prefs.getString("hist_${user.username}", null)
             
             var updatedUser = user
             if (savedPassword != null) {
@@ -40,6 +42,14 @@ object UserRepository {
             }
             if (savedProfilePic != null) {
                 updatedUser = updatedUser.copy(profilePictureUri = savedProfilePic)
+            }
+            if (savedHistory != null) {
+                val historyList = mutableListOf<String>()
+                val jsonArray = JSONArray(savedHistory)
+                for (i in 0 until jsonArray.length()) {
+                    historyList.add(jsonArray.getString(i))
+                }
+                updatedUser = updatedUser.copy(passwordHistory = historyList)
             }
             users[index] = updatedUser
         }
@@ -59,13 +69,31 @@ object UserRepository {
     fun updatePassword(context: Context, username: String, newPassword: String): Boolean {
         val index = users.indexOfFirst { it.username == username }
         if (index != -1) {
-            users[index] = users[index].copy(password = newPassword)
+            val oldPassword = users[index].password
+            val currentHistory = users[index].passwordHistory.toMutableList()
+            
+            // Add current password to history before updating
+            currentHistory.add(0, oldPassword)
+            // Keep only the last 3 passwords
+            if (currentHistory.size > 3) {
+                currentHistory.removeAt(currentHistory.size - 1)
+            }
+
+            users[index] = users[index].copy(
+                password = newPassword,
+                passwordHistory = currentHistory
+            )
             
             // Permanently save to phone memory
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            prefs.edit().putString("pwd_$username", newPassword).apply()
+            val historyJson = JSONArray(currentHistory).toString()
             
-            Log.d("UserRepository", "Password permanently saved for: $username")
+            prefs.edit()
+                .putString("pwd_$username", newPassword)
+                .putString("hist_$username", historyJson)
+                .apply()
+            
+            Log.d("UserRepository", "Password and history permanently saved for: $username")
             return true
         }
         return false

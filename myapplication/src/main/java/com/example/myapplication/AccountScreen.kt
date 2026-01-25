@@ -322,6 +322,8 @@ fun ChangePasswordDialog(user: User, onDismiss: () -> Unit) {
                             when {
                                 currentPassword != user.password -> errorMessage = "Incorrect current password"
                                 newPassword.isEmpty() -> errorMessage = "New password cannot be empty"
+                                newPassword == user.password -> errorMessage = "New password cannot be the same as current"
+                                user.passwordHistory.contains(newPassword) -> errorMessage = "New password cannot be one of your last 3 passwords"
                                 newPassword != confirmPassword -> errorMessage = "Passwords do not match"
                                 else -> {
                                     UserRepository.updatePassword(context, user.username, newPassword)
