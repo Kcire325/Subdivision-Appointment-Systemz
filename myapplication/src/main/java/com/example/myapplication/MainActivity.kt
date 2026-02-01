@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -38,7 +37,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
-import java.util.UUID
+import java.text.SimpleDateFormat
+import java.util.*
 
 // --- 1. DATA MODELS & ENUMS ---
 
@@ -61,7 +61,9 @@ data class ReservationItem(
     val formattedDate: String = "",
     val paymentProofUri: String? = null,
     val rejectionReason: String? = null,
-    val cost: Double = 0.0
+    val cost: Double = 0.0,
+    val isDeletedByAdmin: Boolean = false,
+    val isDeletedByUser: Boolean = false
 )
 
 // --- 2. SHARED VIEWMODEL ---
@@ -77,10 +79,45 @@ class ReservationViewModel : ViewModel() {
         refreshCalendarEvents()
     }
 
+    private fun parseFormattedDate(dateStr: String): String {
+        return try {
+            val inputFormat = SimpleDateFormat("MMMM d, yyyy", Locale.US)
+            val outputFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            val date = inputFormat.parse(dateStr)
+            if (date != null) outputFormat.format(date) else ""
+        } catch (e: Exception) { "" }
+    }
+
     fun refreshCalendarEvents() {
         calendarEvents.clear()
+        
+        // 1. Sync Community Events first (High Priority)
+        sampleEvents.forEach { communityEvent ->
+            communityEvent.schedules.forEach { schedule ->
+                val times = schedule.time.split(" - ")
+                if (times.size >= 2) {
+                    calendarEvents.add(
+                        CalendarEvent(
+                            id = calendarEvents.size + 1,
+                            title = communityEvent.title,
+                            date = parseFormattedDate(schedule.date),
+                            startTime = times[0],
+                            endTime = times[1],
+                            venue = schedule.venue,
+                            description = communityEvent.description,
+                            reservedBy = "System",
+                            reserverRole = "Community Event",
+                            status = "ACTIVE"
+                        )
+                    )
+                }
+            }
+        }
+
+        // 2. Sync User Reservations
         _reservations.forEach { item ->
-            if (item.status == ReservationStatus.ACTIVE || item.status == ReservationStatus.PENDING) {
+            // Calendar only shows non-deleted items that are ACTIVE or PENDING
+            if (!item.isDeletedByAdmin && (item.status == ReservationStatus.ACTIVE || item.status == ReservationStatus.PENDING)) {
                 val times = item.time.split(" - ")
                 val startT = times[0]
                 val endT = if (times.size > 1) times[1] else ""
@@ -135,6 +172,20 @@ class ReservationViewModel : ViewModel() {
         if (index != -1) {
             val item = _reservations[index]
             _reservations[index] = item.copy(status = newStatus, rejectionReason = reason)
+            ReservationRepository.saveReservations(context, _reservations)
+            refreshCalendarEvents()
+        }
+    }
+
+    fun softDelete(context: Context, id: String, isAdmin: Boolean) {
+        val index = _reservations.indexOfFirst { it.id == id }
+        if (index != -1) {
+            val item = _reservations[index]
+            _reservations[index] = if (isAdmin) {
+                item.copy(isDeletedByAdmin = true)
+            } else {
+                item.copy(isDeletedByUser = true)
+            }
             ReservationRepository.saveReservations(context, _reservations)
             refreshCalendarEvents()
         }
@@ -330,7 +381,7 @@ fun DrawerMenuItem(icon: ImageVector, title: String, onClick: () -> Unit) {
 @Composable
 fun ApprovalScreen(viewModel: ReservationViewModel) {
     val context = LocalContext.current
-    val pendingReservations = viewModel.reservations.filter { it.status == ReservationStatus.PENDING }
+    val pendingReservations = viewModel.reservations.filter { it.status == ReservationStatus.PENDING && !it.isDeletedByAdmin }
 
     Column(modifier = Modifier.fillMaxSize().background(LightLavender).padding(16.dp)) {
         Text("Pending Requests", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = DeepNavy, modifier = Modifier.padding(bottom = 16.dp))
@@ -423,16 +474,25 @@ fun ApprovalCard(reservation: ReservationItem, onAccept: () -> Unit, onReject: (
                         value = rejectionReason,
                         onValueChange = { rejectionReason = it },
                         label = { Text("Reason") },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            if (rejectionReason.isBlank()) {
+                                Text("* Required", color = Color.Red)
+                            }
+                        },
+                        isError = rejectionReason.isBlank()
                     )
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        onReject(rejectionReason)
-                        showRejectDialog = false
+                        if (rejectionReason.isNotBlank()) {
+                            onReject(rejectionReason)
+                            showRejectDialog = false
+                        }
                     },
+                    enabled = rejectionReason.isNotBlank(),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE74C3C))
                 ) {
                     Text("Confirm Rejection")
@@ -475,8 +535,9 @@ fun ApprovalCard(reservation: ReservationItem, onAccept: () -> Unit, onReject: (
 
 @Composable
 fun AdminHistory(viewModel: ReservationViewModel) {
+    val context = LocalContext.current
     val allReservations = viewModel.reservations.filter { 
-        it.status != ReservationStatus.PENDING 
+        it.status != ReservationStatus.PENDING && !it.isDeletedByAdmin
     }
     var selectedFilter by remember { mutableStateOf<ReservationStatus?>(null) }
 
@@ -500,7 +561,7 @@ fun AdminHistory(viewModel: ReservationViewModel) {
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
             items(filteredList) { item ->
-                AdminLogCard(item)
+                AdminLogCard(item, onDelete = { viewModel.softDelete(context, item.id, true) })
             }
             if (filteredList.isEmpty()) {
                 item {
@@ -514,7 +575,27 @@ fun AdminHistory(viewModel: ReservationViewModel) {
 }
 
 @Composable
-fun AdminLogCard(reservation: ReservationItem) {
+fun AdminLogCard(reservation: ReservationItem, onDelete: () -> Unit) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Log") },
+            text = { Text("Are you sure you want to delete this reservation from your logs? This won't be reversible") },
+            confirmButton = {
+                TextButton(onClick = { onDelete(); showDeleteConfirm = false }) {
+                    Text("Delete", color = Color.Red)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -527,8 +608,13 @@ fun AdminLogCard(reservation: ReservationItem) {
                     Text("Reserved by: ${reservation.reservedBy}", fontSize = 12.sp, color = DeepNavy.copy(alpha = 0.7f))
                     Text("${reservation.date} • ${reservation.time}", fontSize = 12.sp, color = MediumGray)
                 }
-                Surface(color = reservation.status.color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
-                    Text(reservation.status.displayName, color = reservation.status.color, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(color = reservation.status.color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
+                        Text(reservation.status.displayName, color = reservation.status.color, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    IconButton(onClick = { showDeleteConfirm = true }) {
+                        Icon(Icons.Default.Delete, "Delete", tint = Color.Gray, modifier = Modifier.size(20.dp))
+                    }
                 }
             }
             if (reservation.status == ReservationStatus.REJECTED && !reservation.rejectionReason.isNullOrEmpty()) {
@@ -536,10 +622,6 @@ fun AdminLogCard(reservation: ReservationItem) {
                 HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
                 Spacer(Modifier.height(8.dp))
                 Text("Reason: ${reservation.rejectionReason}", color = Color(0xFFC0392B), fontSize = 12.sp, fontWeight = FontWeight.Medium)
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Text(text = "₱${String.format("%.2f", reservation.cost)}", fontWeight = FontWeight.Bold, color = DeepNavy)
             }
         }
     }
@@ -549,7 +631,8 @@ fun AdminLogCard(reservation: ReservationItem) {
 
 @Composable
 fun Reservations(user: User, viewModel: ReservationViewModel) {
-    val allReservations = viewModel.reservations.filter { it.reservedBy == user.name }
+    val context = LocalContext.current
+    val allReservations = viewModel.reservations.filter { it.reservedBy == user.name && !it.isDeletedByUser }
     var selectedFilter by remember { mutableStateOf<ReservationStatus?>(null) }
 
     val filteredList = remember(selectedFilter, allReservations.size) {
@@ -570,7 +653,7 @@ fun Reservations(user: User, viewModel: ReservationViewModel) {
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
             items(filteredList) { item ->
-                ReservationCard(item)
+                ReservationCard(item, onDelete = { viewModel.softDelete(context, item.id, false) })
             }
             if (filteredList.isEmpty()) {
                 item {
@@ -586,13 +669,29 @@ fun Reservations(user: User, viewModel: ReservationViewModel) {
 // --- 7. UI COMPONENTS & HELPERS ---
 
 @Composable
-fun ReservationCard(reservation: ReservationItem) {
-    var isExpanded by remember { mutableStateOf(false) }
+fun ReservationCard(reservation: ReservationItem, onDelete: () -> Unit) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Reservation") },
+            text = { Text("Are you sure you want to delete this reservation from your history? This will won't be reversible") },
+            confirmButton = {
+                TextButton(onClick = { onDelete(); showDeleteConfirm = false }) {
+                    Text("Delete", color = Color.Red)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { isExpanded = !isExpanded },
+        modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color.White),
         elevation = CardDefaults.cardElevation(2.dp)
     ) {
@@ -602,62 +701,22 @@ fun ReservationCard(reservation: ReservationItem) {
                     Text(reservation.title, fontWeight = FontWeight.Bold, color = DeepNavy)
                     Text("${reservation.date} • ${reservation.time}", fontSize = 13.sp, color = MediumGray)
                 }
-                Surface(color = reservation.status.color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
-                    Text(reservation.status.displayName, color = reservation.status.color, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(color = reservation.status.color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
+                        Text(reservation.status.displayName, color = reservation.status.color, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    IconButton(onClick = { showDeleteConfirm = true }) {
+                        Icon(Icons.Default.Delete, "Delete", tint = Color.Gray, modifier = Modifier.size(20.dp))
+                    }
                 }
             }
-            
-            AnimatedVisibility(visible = isExpanded) {
-                Column(modifier = Modifier.padding(top = 16.dp)) {
-                    HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
-                    Spacer(Modifier.height(16.dp))
-                    
-                    DetailRow("Contact No.", reservation.contact)
-                    DetailRow("Time Slot", reservation.time)
-                    DetailRow("Date", reservation.date)
-                    DetailRow("Purpose", reservation.purpose)
-                    
-                    if (reservation.status == ReservationStatus.REJECTED && !reservation.rejectionReason.isNullOrEmpty()) {
-                        DetailRow("Reason", reservation.rejectionReason, Color(0xFFC0392B))
-                    }
-                    
-                    if (reservation.paymentProofUri != null) {
-                        Spacer(Modifier.height(12.dp))
-                        Text("Payment Proof", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MediumGray)
-                        Spacer(Modifier.height(8.dp))
-                        AsyncImage(
-                            model = reservation.paymentProofUri,
-                            contentDescription = "Payment Proof",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp)
-                                .clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                    
-                    Spacer(Modifier.height(16.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Total Cost", fontWeight = FontWeight.Bold, color = DeepNavy)
-                        Text("₱${String.format("%.2f", reservation.cost)}", fontWeight = FontWeight.Bold, color = DeepNavy)
-                    }
-                }
+            if (reservation.status == ReservationStatus.REJECTED && !reservation.rejectionReason.isNullOrEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(color = Color.LightGray.copy(alpha = 0.3f))
+                Spacer(Modifier.height(8.dp))
+                Text("Reason: ${reservation.rejectionReason}", color = Color(0xFFC0392B), fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
         }
-    }
-}
-
-@Composable
-fun DetailRow(label: String, value: String, valueColor: Color = DeepNavy) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(text = label, fontSize = 12.sp, color = MediumGray, fontWeight = FontWeight.Medium)
-        Text(text = value, fontSize = 12.sp, color = valueColor, fontWeight = FontWeight.Bold)
     }
 }
 
