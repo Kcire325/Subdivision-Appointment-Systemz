@@ -18,6 +18,7 @@ object UserRepository {
     // Initial static list of users
     private val initialUsers = listOf(
         User("admin", "admin123", "System Administrator", "admin@subdivision.com", "Admin", "0000000000", "Admin Office"),
+        User("admin1", "123", "Admin Assistant", "admin1@subdivision.com", "Admin", "09112223344", "Admin Office"),
         User("test", "123", "Test User", "test@example.com", "Homeowner", "09123456789", "Blk 1 Lot 1"),
         User("eyong", "123", "Eyong Gabriel", "eyong@example.com", "Homeowner", "09223334455", "Blk 5 Lot 12 Phase 2"),
         User("clifford08", "123", "Clifford", "clifford@example.com", "Homeowner", "09123456789", "Blk 10 Lot 5")
